@@ -1,5 +1,6 @@
 import torch
 
+
 class MultiHeadAttention(torch.nn.Module):
     def __init__(self, dim, n_head):
         super().__init__()
