@@ -1,12 +1,18 @@
 import pandas as pd
 import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
+
 import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm
+
 
 # Load the dataset
 file_path = 'data/mise_2_weekly.csv'
@@ -63,58 +69,97 @@ class LSTMModel(nn.Module):
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = LSTMModel().to(device)
 
-# Define the loss function and the optimizer
-loss_function = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=3e-3)
-
-# Training the model
-epochs = 2000
-for i in range(epochs):
-    for seq, labels in train_dataloader:
-        seq, labels = seq.to(device), labels.to(device)
-        optimizer.zero_grad()
-        model.hidden_cell = (torch.zeros(1, seq.size(0), model.hidden_layer_size).to(device),
-                             torch.zeros(1, seq.size(0), model.hidden_layer_size).to(device))
-
-        y_pred = model(seq)
-
-        single_loss = loss_function(y_pred, labels)
-        single_loss.backward()
-        optimizer.step()
-
-    if i % 10 == 1:
-        print(f'epoch: {i:3} loss: {single_loss.item():10.8f}')
-
-print(f'epoch: {epochs-1:3} loss: {single_loss.item():10.10f}')
-
-# Autoregressive prediction
-model.eval()
-test_predictions = []
-seq = X_test[0].unsqueeze(0).to(device)  # Start with the first test sequence
-
-for _ in range(len(X_test)):
-    with torch.no_grad():
-        model.hidden_cell = (torch.zeros(1, 1, model.hidden_layer_size).to(device),
-                             torch.zeros(1, 1, model.hidden_layer_size).to(device))
-        y_pred = model(seq)
-        test_predictions.append(y_pred.item())
-        
-        # Update the sequence by removing the first element and adding the prediction at the end
-        seq = torch.cat((seq[:, 1:, :], y_pred.reshape(1, 1, 1)), axis=1)
-
-# Inverse transform the predictions
-test_predictions = scaler.inverse_transform(np.array(test_predictions).reshape(-1, 1))
-y_test = scaler.inverse_transform(y_test)
-
 # Plot the true labels and predicted labels
-plt.figure(figsize=(10, 6))
-plt.plot(range(len(train_data)), scaler.inverse_transform(train_data[:][1]), label='Train Data')
-plt.plot(range(len(train_data), len(train_data) + len(y_test)), y_test, label='Test Data')
-plt.plot(range(len(train_data), len(train_data) + len(test_predictions)), test_predictions, label='Predictions')
-plt.legend()
-plt.savefig("predictions.png")
+# plt.figure(figsize=(10, 6))
+# plt.plot(range(len(train_data)), scaler.inverse_transform(train_data[:][1]), label='Train Data')
+# plt.plot(range(len(train_data), len(train_data) + len(y_test)), y_test, label='Test Data')
+# plt.plot(range(len(train_data), len(train_data) + len(test_predictions)), test_predictions, label='Predictions')
+# plt.legend()
+# plt.savefig("predictions.png")
 
-# Calculate MSE loss
-mse_loss = nn.MSELoss()
-loss = mse_loss(torch.tensor(test_predictions), torch.tensor(y_test))
-print(f'Mean Squared Error: {loss.item()}')
+
+def train(model, device, epochs, lr, train_dataloader, X_test, y_test):
+    model.train()
+
+    loss_function = torch.nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    print(f"Training the model for {epochs} epochs with learning rate {lr}")
+
+    for epoch in range(epochs):
+        for i, (seq, labels) in enumerate(train_dataloader):
+            seq, labels = seq.to(device), labels.to(device)
+            optimizer.zero_grad()
+            model.hidden_cell = (torch.zeros(1, seq.size(0), model.hidden_layer_size).to(device),
+                                 torch.zeros(1, seq.size(0), model.hidden_layer_size).to(device))
+
+            y_pred = model(seq)
+
+            loss = loss_function(y_pred, labels)
+            loss.backward()
+            optimizer.step()
+
+        if epoch % 10 == 0:
+            print(f'Epoch {epoch} train loss: {loss.item()}')
+
+
+    model.eval()
+    test_predictions = []
+    seq = X_test[0].unsqueeze(0).to(device)
+
+    for _ in range(len(X_test)):
+        with torch.no_grad():
+            model.hidden_cell = (torch.zeros(1, 1, model.hidden_layer_size).to(device),
+                                 torch.zeros(1, 1, model.hidden_layer_size).to(device))
+            y_pred = model(seq)
+            test_predictions.append(y_pred.item())
+
+            seq = torch.cat((seq[:, 1:, :], y_pred.reshape(1, 1, 1)), axis=1)
+
+
+    test_predictions = scaler.inverse_transform(np.array(test_predictions).reshape(-1, 1))
+    y_test = scaler.inverse_transform(y_test.reshape(-1, 1))
+
+    mse_loss = nn.MSELoss()
+    loss = mse_loss(torch.tensor(test_predictions), torch.tensor(y_test))
+    print(f'Mean Squared Error: {loss.item()}')
+
+    return model, test_predictions, y_test
+
+
+lrs = np.arange(5e-5, 1e-2, 5e-5)[::-1]
+lrs = list(lrs)
+print(lrs, len(lrs))
+epochs_set = list(range(100, 2000, 100))
+print(epochs_set, len(epochs_set))
+result = []
+
+for epochs in epochs_set:
+    out = []
+    for lr in lrs:
+        model = LSTMModel().to(device)
+        model, test_predictions, y_out = train(model, device, epochs, lr, train_dataloader, X_test, y_test)
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(len(train_data)), scaler.inverse_transform(train_data[:][1]), label='Train Data')
+        plt.plot(range(len(train_data), len(train_data) + len(y_out)), y_out, label='Test Data')
+        plt.plot(range(len(train_data), len(train_data) + len(test_predictions)), test_predictions, label='Predictions')
+        plt.legend()
+        plt.savefig(f"images/predictions_{epochs}_{lr}.png")
+        plt.close()
+
+        loss_fn = nn.MSELoss()
+        loss = loss_fn(torch.tensor(test_predictions), torch.tensor(y_out))
+
+        out.append(loss)
+
+    result.append(out)
+
+# Plot the results
+plt.figure(figsize=(10, 6))
+sns.heatmap(result, annot=True, xticklabels=lrs, yticklabels=epochs_set)
+plt.xlabel('Learning Rate')
+plt.ylabel('Epochs')
+plt.title('Mean Squared Error')
+
+plt.savefig("results.png")
